@@ -28,10 +28,3 @@ class Camera:
 
     def __del__(self):
         self.pipeline.stop()
-
-
-cam = Camera()
-
-for i in range(10):
-    cam.take_picture("test_{:02d}.jpg".format(i))
-    time.sleep(1.0)

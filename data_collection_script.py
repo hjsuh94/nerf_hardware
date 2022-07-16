@@ -1,7 +1,7 @@
 import numpy as np
 import zmq
 import lcm
-import time, copy
+import time, copy, os
 
 from drake import lcmt_robot_state
 from drake import lcmt_robot_plan
@@ -11,6 +11,8 @@ from plan_runner_client.calc_plan_msg import (
     calc_joint_space_plan_msg,
     calc_task_space_plan_msg,
 )
+
+from camera import Camera
 
 from pydrake.math import RigidTransform, RollPitchYaw, RotationMatrix
 from pydrake.common.eigen_geometry import Quaternion, AngleAxis
@@ -53,34 +55,75 @@ X_W = RigidTransform([0.5, 0.0, 0.0])
 default_rot = RotationMatrix.MakeXRotation(-np.pi/2).multiply(
     RotationMatrix.MakeYRotation(-np.pi/2))
 
+#cam = Camera()
+global cam_count 
+cam_count = 0
+
+global joint_lst
+joint_lst = []
+
+global data_name
+data_name = "bell_pepper"
+
 #=============================================================================
 # Arc Frames
 #=============================================================================
 
+def go_to_location(X_WT_target, duration):
+    X_WT_lst = []
+    X_WT_lst.append(zmq_client.get_current_ee_pose(frame_E).multiply(X_ET))
+    X_WT_lst.append(X_WT_target)
+
+    t_knots = [0, duration]
+    plan_msg = calc_task_space_plan_msg(X_ET, X_WT_lst, t_knots)
+    zmq_client.send_plan(plan_msg)
+    zmq_client.wait_for_plan_to_finish()
+
+def take_picture():
+    #cam.take_picture(os.path.join(data_name, "{:03d}.jpg".format(cam_count)))
+    joint_lst.append(zmq_client.get_current_joint_angles())
+    #cam_count += 1
+    time.sleep(0.2)
+
+joint_lst = []
 r = 0.3
-phi_range = np.linspace(-np.pi/2, np.pi/2, 10)
+phi_range = [-np.pi/2,
+             -np.pi/2 + 1.0 * np.pi/16,
+             -np.pi/2 + 2.0 * np.pi/16,
+             -np.pi/2 + 3.0 * np.pi/16,
+             -np.pi/2 + 4.0 * np.pi/16,
+             np.pi/2 - 1.0 * np.pi/16,
+             np.pi/2 - 2.0 * np.pi/16,
+             np.pi/2 - 3.0 * np.pi/16,
+             np.pi/2 - 4.0 * np.pi/16,
+             ]
+
+R_WT_default = RotationMatrix(np.array([
+        [0, 0, -1],
+        [1, 0, 0],
+        [0, -1, 0]
+    ]))
+
+X_WT_default = RigidTransform(
+    R_WT_default,
+    [0.55, 0.0, 0.3]
+)
+
+go_to_location(X_WT_default, 10)
 
 # Divide into stages.
 for phi in phi_range:
+
     max_theta = 0.5 * np.abs(phi) + np.pi/12
-    phi_num = int(round(max_theta * 10.0))
+    phi_num = int(round(max_theta * 30.0))
 
     theta_range = np.linspace(-max_theta, max_theta, phi_num)
 
     duration = 2.0 * phi_num
-    t_knots = np.zeros(phi_num + 1)
-    t_knots[0] = 0
-    t_knots[1:] = 10 + np.linspace(0, duration, phi_num)
-
-    print(t_knots)
 
     X_WT_lst = []
-    X_WT_lst.append(zmq_client.get_current_ee_pose(frame_E).multiply(X_ET))
 
-    print(max_theta)
-    print(phi_num)
-    print(duration)
-
+    # Compute X_WT_lst in the loop.
     for theta in theta_range:
         # Compute theta rotation.
         theta_rot = default_rot.multiply(RotationMatrix.MakeXRotation(theta))
@@ -120,8 +163,12 @@ for phi in phi_range:
         X_WT = RigidTransform(RotationMatrix(AA2), translation)
         X_WT_lst.append(X_WT)
 
-    plan_msg = calc_task_space_plan_msg(X_ET, X_WT_lst, t_knots)
-    zmq_client.send_plan(plan_msg)
-    time.sleep(1.0)
-    zmq_client.wait_for_plan_to_finish()
-    time.sleep(2.0)
+    # Plan the msg.
+    go_to_location(X_WT_lst[0], 10)
+    take_picture()
+    for i in range(1, len(X_WT_lst)):
+        go_to_location(X_WT_lst[i], 1)
+        take_picture()
+    go_to_location(X_WT_default, 10)
+
+np.savetxt(data_name + ".csv", np.array(joint_lst))
